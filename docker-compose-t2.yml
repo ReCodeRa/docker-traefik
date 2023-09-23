@@ -115,7 +115,7 @@ services:
       # Automatically set Host rule for services
       # - --providers.docker.defaultrule=Host(`{{ index .Labels "com.docker.compose.service" }}.$DOMAINNAME_CLOUD_SERVER`)
       - --providers.docker.exposedByDefault=false
-      # - --entrypoints.https.http.middlewares=chain-oauth@file
+      - --entrypoints.https.http.middlewares=chain-oauth@file
       - --entrypoints.https.http.tls.options=tls-opts@file
       # Add dns-cloudflare as default certresolver for all services. Also enables TLS and no need to specify on individual services
       - --entrypoints.https.http.tls.certresolver=dns-cloudflare
@@ -128,7 +128,7 @@ services:
       - --providers.file.directory=/rules # Load dynamic configuration from one or more .toml or .yml files in a directory
       # - --providers.file.filename=/path/to/file # Load dynamic configuration from a file
       - --providers.file.watch=true # Only works on top level files in the rules folder
-      #- --certificatesResolvers.dns-cloudflare.acme.caServer=https://acme-staging-v02.api.letsencrypt.org/directory # LetsEncrypt Staging Server - uncomment when testing
+      - --certificatesResolvers.dns-cloudflare.acme.caServer=https://acme-staging-v02.api.letsencrypt.org/directory # LetsEncrypt Staging Server - uncomment when testing
       - --certificatesResolvers.dns-cloudflare.acme.email=$CLOUDFLARE_EMAIL
       - --certificatesResolvers.dns-cloudflare.acme.storage=/acme.json
       - --certificatesResolvers.dns-cloudflare.acme.dnsChallenge.provider=cloudflare
@@ -180,7 +180,7 @@ services:
       - "traefik.http.routers.traefik-rtr.entrypoints=https"
       - "traefik.http.routers.traefik-rtr.rule=Host(`traefik.$DOMAINNAME_CLOUD_SERVER`)"
    #   - "traefik.http.routers.traefik-rtr.tls=true" # Some people had 404s without this
-   #   - "traefik.http.routers.traefik-rtr.tls.certresolver=dns-cloudflare" # Comment out this line after first run of traefik to force the use of wildcard certs
+      - "traefik.http.routers.traefik-rtr.tls.certresolver=dns-cloudflare" # Comment out this line after first run of traefik to force the use of wildcard certs
    #   - "traefik.http.routers.traefik-rtr.tls.domains[0].main=$DOMAINNAME_CLOUD_SERVER"
    #   - "traefik.http.routers.traefik-rtr.tls.domains[0].sans=*.$DOMAINNAME_CLOUD_SERVER"
    #   # - "traefik.http.routers.traefik-rtr.tls.domains[1].main=$DOMAINNAME2" # Pulls main cert for second domain
@@ -499,9 +499,11 @@ services:
       - no-new-privileges:true
     restart: unless-stopped
   #  profiles: ["apps", "all"]
-    network_mode: "service:gluetun"
-    # ports:
-    #   - "8081:8080" # Explosed via gluetun. 8081 because crowdsec is using port 8080
+    networks:
+      - t2_proxy
+    # network_mode: "service:gluetun"
+    ports:
+      - "8081:8080" # Explosed via gluetun. 8081 because crowdsec is using port 8080
     volumes:
       - $DOCKERDIR/appdata/qbittorrent:/config
       - $DATADIR/downloads:/data/downloads # Ensure that downloads folder is set to /data/downloads in qBittorrent
@@ -510,13 +512,24 @@ services:
       PUID: $PUID
       PGID: $PGID
       UMASK_SET: 002
-    healthcheck: # https://github.com/qdm12/gluetun/issues/641#issuecomment-933856220
-      test: "curl -sf https://example.com  || exit 1"
-      interval: 1m
-      timeout: 10s
-      retries: 1
-    labels: # Traefik labels added via glueten
-      - "deunhealth.restart.on.unhealthy=true"
+    # healthcheck: # https://github.com/qdm12/gluetun/issues/641#issuecomment-933856220
+    #   test: "curl -sf https://example.com  || exit 1"
+    #   interval: 1m
+    #   timeout: 10s
+    #   retries: 1
+    # # labels: # Traefik labels added via glueten
+    #   - "deunhealth.restart.on.unhealthy=true"
+    labels:
+      - "traefik.enable=true"
+    ## HTTP Routers
+      - "traefik.http.routers.gluetun-qbittorrent-rtr.entrypoints=https"
+      - "traefik.http.routers.gluetun-qbittorrent-rtr.rule=Host(`qbit.$DOMAINNAME_CLOUD_SERVER`)" # qBittorrent
+    ## Middlewares
+      - "traefik.http.routers.gluetun-qbittorrent-rtr.middlewares=chain-oauth@file" # qBittorrent
+    ## HTTP Services
+      - "traefik.http.routers.gluetun-qbittorrent-rtr.service=gluetun-svc" # qBittorrent
+      - "traefik.http.services.gluetun-svc.loadbalancer.server.port=8080" # qBittorrent
+
 
   # # SABnzbd - Binary newsgrabber (NZB downloader)
   # # Disable SABNnzbd's built-in HTTPS support for traefik proxy to work
@@ -1136,52 +1149,52 @@ services:
   #     - "traefik.http.routers.dozzle-rtr.service=dozzle-svc"
   #     - "traefik.http.services.dozzle-svc.loadbalancer.server.port=8080"
 
-  # # Gluetun - VPN Client for Docker Containers and More
-  # # Gluetun only for use by torrent clients + on demand lan devices.
-  # # Arr apps do not need VPN (not recommended), unless you have ISP/country restrictions.
-  gluetun:
-    image: qmcgaw/gluetun
-    container_name: gluetun
-    security_opt:
-      - no-new-privileges:true
-    restart: unless-stopped
-  #   profiles: ["core", "all"]
-    networks:
-      - t2_proxy
-    cap_add:
-      - NET_ADMIN
-    devices:
-      - /dev/net/tun
-    ports:
-      - "8081:8080" # Exposing qBittorrent through Docker Host LAN IP
-  #   # #   - 8888:8888/tcp # HTTP proxy
-  #   # #   - 8388:8388/tcp # Shadowsocks
-  #   # #   - 8388:8388/udp # Shadowsocks
-    volumes:
-      - $DOCKERDIR/appdata/gluetun:/gluetun
-    environment:
-      TZ: $TZ
-      # Wireguard
-      VPN_SERVICE_PROVIDER: surfshark
-      VPN_TYPE: wireguard
-      WIREGUARD_PRIVATE_KEY: $SURFSHARK_WG_PRIVATE_KEY
-      WIREGUARD_ADDRESSES: 10.14.0.2/16
-  #    SERVER_COUNTRIES: Netherlands
-  #     # # OpenVPN
-  #     # VPN_SERVICE_PROVIDER: nordvpn
-  #     # VPN_TYPE: openvpn
-  #     # OPENVPN_USER: $NORDVPN_USERNAME
-  #     # OPENVPN_PASSWORD: $NORDVPN_PASSWORD 
-    labels:
-      - "traefik.enable=true"
-      ## HTTP Routers
-      - "traefik.http.routers.gluetun-qbittorrent-rtr.entrypoints=https"
-      - "traefik.http.routers.gluetun-qbittorrent-rtr.rule=Host(`qbit.$DOMAINNAME_CLOUD_SERVER`)" # qBittorrent
-      ## Middlewares
-      - "traefik.http.routers.gluetun-qbittorrent-rtr.middlewares=chain-oauth@file" # qBittorrent
-      ## HTTP Services
-      - "traefik.http.routers.gluetun-qbittorrent-rtr.service=gluetun-svc" # qBittorrent
-      - "traefik.http.services.gluetun-svc.loadbalancer.server.port=8080" # qBittorrent
+  # # # Gluetun - VPN Client for Docker Containers and More
+  # # # Gluetun only for use by torrent clients + on demand lan devices.
+  # # # Arr apps do not need VPN (not recommended), unless you have ISP/country restrictions.
+  # gluetun:
+  #   image: qmcgaw/gluetun
+  #   container_name: gluetun
+  #   security_opt:
+  #     - no-new-privileges:true
+  #   restart: unless-stopped
+  # #   profiles: ["core", "all"]
+  #   networks:
+  #     - t2_proxy
+  #   cap_add:
+  #     - NET_ADMIN
+  #   devices:
+  #     - /dev/net/tun
+  #   ports:
+  #     - "8081:8080" # Exposing qBittorrent through Docker Host LAN IP
+  # #   # #   - 8888:8888/tcp # HTTP proxy
+  # #   # #   - 8388:8388/tcp # Shadowsocks
+  # #   # #   - 8388:8388/udp # Shadowsocks
+  #   volumes:
+  #     - $DOCKERDIR/appdata/gluetun:/gluetun
+  #   environment:
+  #     TZ: $TZ
+  #     # Wireguard
+  #     VPN_SERVICE_PROVIDER: surfshark
+  #     VPN_TYPE: wireguard
+  #     WIREGUARD_PRIVATE_KEY: $SURFSHARK_WG_PRIVATE_KEY
+  #     WIREGUARD_ADDRESSES: 10.14.0.2/16
+  # #    SERVER_COUNTRIES: Netherlands
+  # #     # # OpenVPN
+  # #     # VPN_SERVICE_PROVIDER: nordvpn
+  # #     # VPN_TYPE: openvpn
+  # #     # OPENVPN_USER: $NORDVPN_USERNAME
+  # #     # OPENVPN_PASSWORD: $NORDVPN_PASSWORD 
+  #   labels:
+  #     - "traefik.enable=true"
+  #     ## HTTP Routers
+  #     - "traefik.http.routers.gluetun-qbittorrent-rtr.entrypoints=https"
+  #     - "traefik.http.routers.gluetun-qbittorrent-rtr.rule=Host(`qbit.$DOMAINNAME_CLOUD_SERVER`)" # qBittorrent
+  #     ## Middlewares
+  #     - "traefik.http.routers.gluetun-qbittorrent-rtr.middlewares=chain-oauth@file" # qBittorrent
+  #     ## HTTP Services
+  #     - "traefik.http.routers.gluetun-qbittorrent-rtr.service=gluetun-svc" # qBittorrent
+  #     - "traefik.http.services.gluetun-svc.loadbalancer.server.port=8080" # qBittorrent
 
   # # Autoindex - Simple Directory Index (for Sitespeed.io Results)
   # sitespeed:
